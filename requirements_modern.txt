@@ -1,0 +1,22 @@
+# Baseado no requirements.txt, mas atualizado para compatibilidade
+# com numpy 2.x e Python 3.10+
+
+# Mantidos do original, compatíveis com numpy 2.x
+numpy==2.2.6
+opencv-python==4.12.0.88
+
+# Pacotes que precisavam de upgrade (versões antigas removidas)
+nibabel
+scikit-image
+
+# Outras dependências (versões antigas removidas para segurança)
+dcm2niix
+json5
+jupyter
+Pillow
+sacred
+SimpleITK
+tqdm
+
+# Pacote que faltava para os notebooks
+matplotlib
