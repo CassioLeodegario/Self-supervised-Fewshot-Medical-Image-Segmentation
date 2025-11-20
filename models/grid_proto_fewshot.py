@@ -22,6 +22,52 @@ BG_PROT_MODE = 'gridconv'  # using local prototype only. Also 'mask' refers to u
 FG_THRESH = 0.95
 BG_THRESH = 0.95
 
+class RefinementModule(nn.Module):
+    """
+    Decodificador para refinar a segmentação
+    Recebe:
+        1. A Máscara grosseira (coarse prediction) dos protótipos.
+        2. Features de baixo nível (skip connection) do encoder com detalhes espaciais 
+    """
+    def __init__(self, high_level_channels, low_level_channels, out_channels=2):
+        super(RefinementModule, self).__init__()
+
+        #Reduz os canais da feature de baixo nível para não pesar muito
+        self.conv_low = nn.Sequential(
+            nn.Conv2d(low_level_channels, 48, 1, bias=False),
+            nn.BatchNorm2d(48),
+            nn.ReLU()
+        )
+
+        # Convoluções para fundir a predição + features de baixo nível
+        # Entrada: canais de máscara (ex: 2) + 48 (low level)
+        self.cat_conv = nn.Sequential(
+            nn.Conv2d(high_level_channels + 48, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Conv2d(256, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Conv2d(256, out_channels, 1) # Saída final
+        )
+    def forward(self, coarse_pred, low_level_feat, target_size):
+        # 1. Upsample da predição grosseira para o tamanho da feature de baixo nível
+        coarse_pred = F.interpolate(coarse_pred, size=low_level_feat.shape[-2:], mode='bilinear', align_corners=True)
+
+        # 2. Prepara a feature de baixo nível
+        low_level_feat = self.conv_low(low_level_feat)
+
+        # 3. Concatena (Skip Connection)
+        x = torch.cat([coarse_pred, low_level_feat], dim=1)
+
+        # 4. Refina
+        x = self.cat_conv(x)
+
+        # 5. Upsample final para o tamnho original da imagem (target_size)
+        return F.interpolate(x, size=target_size, mode='bilinear', align_corners=True)
+
 class FewShotSeg(nn.Module):
     """
     ALPNet
@@ -60,6 +106,9 @@ class FewShotSeg(nn.Module):
             self.cls_unit = MultiProtoAsConv(proto_grid = [proto_hw, proto_hw], feature_hw =  self.config["feature_hw"]) # when treating it as ordinary prototype
         else:
             raise NotImplementedError(f'Classifier {self.config["cls_name"]} not implemented')
+        
+        # Inicializa o decoder
+        self.decoder = RefinementModule(high_level_channels=2, low_level_channels=64, out_channels=2)
 
     def forward(self, supp_imgs, fore_mask, back_mask, qry_imgs, isval, val_wsize, show_viz = False):
         """
@@ -91,13 +140,15 @@ class FewShotSeg(nn.Module):
         imgs_concat = torch.cat([torch.cat(way, dim=0) for way in supp_imgs]
                                 + [torch.cat(qry_imgs, dim=0),], dim=0)
 
-        img_fts = self.encoder(imgs_concat, low_level = False)
+        img_fts, low_level_fts = self.encoder(imgs_concat, low_level = True)
         fts_size = img_fts.shape[-2:]
 
         supp_fts = img_fts[:n_ways * n_shots * sup_bsize].view(
             n_ways, n_shots, sup_bsize, -1, *fts_size)  # Wa x Sh x B x C x H' x W'
         qry_fts = img_fts[n_ways * n_shots * sup_bsize:].view(
             n_queries, qry_bsize, -1, *fts_size)   # N x B x C x H' x W'
+        
+        qry_low_level = low_level_fts[n_ways * n_shots * sup_bsize:]
         fore_mask = torch.stack([torch.stack(way, dim=0)
                                  for way in fore_mask], dim=0)  # Wa x Sh x B x H' x W'
         fore_mask = torch.autograd.Variable(fore_mask, requires_grad = True)
@@ -146,7 +197,11 @@ class FewShotSeg(nn.Module):
                     fg_sim_maps.append(aux_attr['raw_local_sims'])
 
             pred = torch.cat(scores, dim=1)  # N x (1 + Wa) x H' x W'
-            outputs.append(F.interpolate(pred, size=img_size, mode='bilinear'))
+
+            refined_output = self.decoder(pred, qry_low_level, img_size)
+            outputs.append(refined_output)
+
+            # outputs.append(F.interpolate(pred, size=img_size, mode='bilinear'))
 
             ###### Prototype alignment loss ######
             if self.config['align'] and self.training:
