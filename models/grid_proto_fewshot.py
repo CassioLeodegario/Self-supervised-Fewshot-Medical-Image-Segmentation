@@ -82,6 +82,11 @@ class FewShotSeg(nn.Module):
         self.get_encoder(in_channels)
         self.get_cls()
 
+        if self.pretrained_path:
+            # Agora que tudo (encoder + decoder) existe, podemos carregar os pesos com segurança
+            self.load_state_dict(torch.load(self.pretrained_path))
+            print(f'###### Pre-trained model {self.pretrained_path} has been loaded ######')
+
     def get_encoder(self, in_channels):
         # if self.config['which_model'] == 'deeplab_res101':
         if self.config['which_model'] == 'dlfcn_res101':
@@ -91,9 +96,9 @@ class FewShotSeg(nn.Module):
         else:
             raise NotImplementedError(f'Backbone network {self.config["which_model"]} not implemented')
 
-        if self.pretrained_path:
-            self.load_state_dict(torch.load(self.pretrained_path))
-            print(f'###### Pre-trained model f{self.pretrained_path} has been loaded ######')
+        # if self.pretrained_path:
+        #     self.load_state_dict(torch.load(self.pretrained_path))
+        #     print(f'###### Pre-trained model f{self.pretrained_path} has been loaded ######')
 
     def get_cls(self):
         """
