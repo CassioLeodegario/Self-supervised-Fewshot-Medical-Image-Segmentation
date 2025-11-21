@@ -23,24 +23,15 @@ FG_THRESH = 0.95
 BG_THRESH = 0.95
 
 class RefinementModule(nn.Module):
-    """
-    Decodificador para refinar a segmentação
-    Recebe:
-        1. A Máscara grosseira (coarse prediction) dos protótipos.
-        2. Features de baixo nível (skip connection) do encoder com detalhes espaciais 
-    """
     def __init__(self, high_level_channels, low_level_channels, out_channels=2):
         super(RefinementModule, self).__init__()
-
-        #Reduz os canais da feature de baixo nível para não pesar muito
+        
         self.conv_low = nn.Sequential(
             nn.Conv2d(low_level_channels, 48, 1, bias=False),
             nn.BatchNorm2d(48),
             nn.ReLU()
         )
 
-        # Convoluções para fundir a predição + features de baixo nível
-        # Entrada: canais de máscara (ex: 2) + 48 (low level)
         self.cat_conv = nn.Sequential(
             nn.Conv2d(high_level_channels + 48, 256, 3, padding=1, bias=False),
             nn.BatchNorm2d(256),
@@ -49,24 +40,21 @@ class RefinementModule(nn.Module):
             nn.Conv2d(256, 256, 3, padding=1, bias=False),
             nn.BatchNorm2d(256),
             nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Conv2d(256, out_channels, 1) # Saída final
+            nn.Conv2d(256, out_channels, 1) 
         )
+
     def forward(self, coarse_pred, low_level_feat, target_size):
-        # 1. Upsample da predição grosseira para o tamanho da feature de baixo nível
-        coarse_pred = F.interpolate(coarse_pred, size=low_level_feat.shape[-2:], mode='bilinear', align_corners=True)
-
-        # 2. Prepara a feature de baixo nível
+        coarse_high_res = F.interpolate(coarse_pred, size=target_size, mode='bilinear', align_corners=True)
+        
+        coarse_for_cat = F.interpolate(coarse_pred, size=low_level_feat.shape[-2:], mode='bilinear', align_corners=True)
         low_level_feat = self.conv_low(low_level_feat)
-
-        # 3. Concatena (Skip Connection)
-        x = torch.cat([coarse_pred, low_level_feat], dim=1)
-
-        # 4. Refina
-        x = self.cat_conv(x)
-
-        # 5. Upsample final para o tamnho original da imagem (target_size)
-        return F.interpolate(x, size=target_size, mode='bilinear', align_corners=True)
+        
+        x = torch.cat([coarse_for_cat, low_level_feat], dim=1)
+        residue = self.cat_conv(x)
+        
+        residue_high_res = F.interpolate(residue, size=target_size, mode='bilinear', align_corners=True)
+        
+        return coarse_high_res + residue_high_res
 
 class FewShotSeg(nn.Module):
     """
